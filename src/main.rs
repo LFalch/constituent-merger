@@ -1,5 +1,5 @@
 use core::panic;
-use std::{io::{stdin, stdout, Write}, fmt::Display, num::NonZeroUsize};
+use std::{io::{stdin, stdout, Write, self}, fmt::Display, num::NonZeroUsize, process::{Command, Stdio}, ffi::OsStr};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Constituent<'a> {
@@ -59,9 +59,11 @@ fn main() {
     println!();
     println!("Now let's annotate it");
     let acons = interactively_annotate(cons);
-    println!("Put this into a syntax tree drawer:");
+    println!("Done!");
     println!("{acons}");
     println!();
+    println!("Trying to draw with dot!");
+    acons.dot_draw("generated_tree.svg", "generated_tree.png").unwrap();
 }
 
 fn get_indices() -> Option<(NonZeroUsize, NonZeroUsize)> {
@@ -107,6 +109,58 @@ impl AnnotatedConstituent<'_> {
             APair(m, _, _) => m,
             AWord(m, _) => m,
         }
+    }
+    fn dot_draw<P1: AsRef<OsStr>, P2: AsRef<OsStr>>(&self, path_svg: P1, path_png: P2) -> io::Result<()> {
+        let mut child = Command::new("dot")
+            .arg("-Tsvg")
+            .arg("-o")
+            .arg(path_svg)
+            .arg("-Tpng")
+            .arg("-o")
+            .arg(path_png)
+            .arg("-Nshape=none")
+            .arg("-Earrowhead=none")
+            .stdin(Stdio::piped())
+            .spawn()?;
+
+        fn draw_node<W: Write>(w: &mut W, node: &AnnotatedConstituent, n: &mut impl Iterator<Item=usize>) -> io::Result<usize> {
+            let n = match node {
+                AWord(m, word) => {
+                    let node_n = n.next().unwrap();
+                    writeln!(w, "n{node_n} [fontcolor=blue label=\"{m}\"]")?;
+                    let word_n = n.next().unwrap();
+                    writeln!(w, "n{word_n} [label=\"{word}\"]")?;
+                    writeln!(w, "n{node_n} -> n{word_n}")?;
+
+                    node_n
+                }
+                APair(m, l, r) => {
+                    let node_n = n.next().unwrap();
+                    writeln!(w, "n{node_n} [fontcolor=blue label=\"{m}\"]")?;
+
+                    let node_l = draw_node(w, l, n)?;
+                    let node_r = draw_node(w, r, n)?;
+
+                    writeln!(w, "n{node_n} -> {{n{node_l} n{node_r}}}")?;
+
+                    node_n
+                }
+            };
+
+            Ok(n)
+        }
+
+        {
+            let i = child.stdin.as_mut().expect("stdin not piped");
+
+            writeln!(i, "digraph {{")?;
+            draw_node(i, &self, &mut (0..))?;
+            writeln!(i, "}}")?;
+        }
+
+        child.wait()?;
+
+        Ok(())
     }
 }
 
