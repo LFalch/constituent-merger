@@ -1,4 +1,3 @@
-use core::panic;
 use std::{io::{stdin, stdout, Write, self}, fmt::Display, num::NonZeroUsize, process::{Command, Stdio}, ffi::OsStr};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -98,19 +97,20 @@ impl Display for Mark {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum AnnotatedConstituent<'a> {
-    APair(Mark, Box<AnnotatedConstituent<'a>>, Box<AnnotatedConstituent<'a>>),
-    AWord(Mark, &'a str)
+pub enum AnnotatedConstituent<'a, M> {
+    APair(M, Box<AnnotatedConstituent<'a, M>>, Box<AnnotatedConstituent<'a, M>>),
+    AWord(M, &'a str)
 }
 
-impl AnnotatedConstituent<'_> {
-    fn mark(&self) -> Mark {
-        match *self {
+impl<M> AnnotatedConstituent<'_, M> {
+    pub fn mark(&self) -> &M {
+        match self {
             APair(m, _, _) => m,
             AWord(m, _) => m,
         }
     }
-    fn dot_draw<P1: AsRef<OsStr>, P2: AsRef<OsStr>>(&self, path_svg: P1, path_png: P2) -> io::Result<()> {
+    fn dot_draw<P1: AsRef<OsStr>, P2: AsRef<OsStr>>(&self, path_svg: P1, path_png: P2) -> io::Result<()>
+    where M: Display {
         let mut child = Command::new("dot")
             .arg("-Tsvg")
             .arg("-o")
@@ -123,7 +123,7 @@ impl AnnotatedConstituent<'_> {
             .stdin(Stdio::piped())
             .spawn()?;
 
-        fn draw_node<W: Write>(w: &mut W, node: &AnnotatedConstituent, n: &mut impl Iterator<Item=usize>) -> io::Result<usize> {
+        fn draw_node<'a, M: Display, W: Write>(w: &mut W, node: &AnnotatedConstituent<'a, M>, n: &mut impl Iterator<Item=usize>) -> io::Result<usize> {
             let n = match node {
                 AWord(m, word) => {
                     let node_n = n.next().unwrap();
@@ -164,7 +164,7 @@ impl AnnotatedConstituent<'_> {
     }
 }
 
-impl Display for AnnotatedConstituent<'_> {
+impl<M: Display> Display for AnnotatedConstituent<'_, M> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             AWord(m, w) => write!(f, "[{m} {w}]"),
@@ -173,26 +173,16 @@ impl Display for AnnotatedConstituent<'_> {
     }
 }
 
-fn ask_for_mark() -> Mark {
+fn ask_for_mark() -> String {
     print!("What is this? ");
     stdout().flush().unwrap();
     let mut answer = String::new();
     stdin().read_line(&mut answer).unwrap();
 
-    let mut chars = answer.trim().chars();
-    let pos = chars.next().unwrap();
-    let p_type = chars.next();
-    assert!(chars.next().is_none());
-
-    match p_type {
-        Some('P') => Phrase(pos),
-        Some('\'') => Bar(pos),
-        None => Bare(pos),
-        _ => panic!("unknown type"),
-    }
+    answer.trim().to_owned()
 }
 
-fn interactively_annotate(constituent: Constituent) -> AnnotatedConstituent {
+fn interactively_annotate(constituent: Constituent) -> AnnotatedConstituent<String> {
     match constituent {
         Word(word) => {
             println!("Constiuent [? {word}]");
@@ -209,29 +199,29 @@ fn interactively_annotate(constituent: Constituent) -> AnnotatedConstituent {
     }
 }
 
-fn fix_constiuent(acons: &mut AnnotatedConstituent) {
-    let mut phrase_queue = Vec::new();
-    fix_constiuent_helper(acons, &mut phrase_queue);
-}
+// fn fix_constiuent(acons: &mut AnnotatedConstituent<Mark>) {
+//     let mut phrase_queue = Vec::new();
+//     fix_constiuent_helper(acons, &mut phrase_queue);
+// }
 
-fn fix_constiuent_helper(acons: &mut AnnotatedConstituent, phrase_queue: &mut Vec<char>) {
-    match acons {
-        AWord(mark, _) => {
-            match *mark {
-                Phrase(c) | Bar(c) | Bare(c) => *mark = Bare(c),
-            };
-        }
-        APair(mark, l, r) => {
-            let lm = l.mark();
-            let rm = r.mark();
+// fn fix_constiuent_helper(acons: &mut AnnotatedConstituent<Mark>, phrase_queue: &mut Vec<char>) {
+//     match acons {
+//         AWord(mark, _) => {
+//             match *mark {
+//                 Phrase(c) | Bar(c) | Bare(c) => *mark = Bare(c),
+//             };
+//         }
+//         APair(mark, l, r) => {
+//             let lm = l.mark();
+//             let rm = r.mark();
 
-            match *mark {
-                Bare(c) => panic!("non-word constituent cannot be a part of speech"),
-                Bar(c) => {
-                    todo!()
-                }
-                Phrase(c) => todo!(),
-            }
-        }
-    }
-}
+//             match *mark {
+//                 Bare(c) => panic!("non-word constituent cannot be a part of speech"),
+//                 Bar(c) => {
+//                     todo!()
+//                 }
+//                 Phrase(c) => todo!(),
+//             }
+//         }
+//     }
+// }
