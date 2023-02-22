@@ -1,4 +1,4 @@
-use std::{io::{stdin, stdout, Write, self}, fmt::Display, num::NonZeroUsize, process::{Command, Stdio}, ffi::OsStr};
+use std::{io::{stdin, stdout, Write, self}, fmt::Display, num::NonZeroUsize, process::Command, ffi::OsStr, fs::File};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Constituent<'a> {
@@ -61,8 +61,8 @@ fn main() {
     println!("Done!");
     println!("{acons}");
     println!();
-    println!("Trying to draw with dot!");
-    acons.dot_draw("generated_tree.svg", "generated_tree.png").unwrap();
+    println!("Generating pdf with qtree package, and converting it to png.");
+    acons.latex_generate("tree.png").unwrap();
 }
 
 fn get_indices() -> Option<(NonZeroUsize, NonZeroUsize)> {
@@ -109,58 +109,62 @@ impl<M> AnnotatedConstituent<'_, M> {
             AWord(m, _) => m,
         }
     }
-    fn dot_draw<P1: AsRef<OsStr>, P2: AsRef<OsStr>>(&self, path_svg: P1, path_png: P2) -> io::Result<()>
+    fn latex_generate<P: AsRef<OsStr>>(&self, path_png: P) -> io::Result<()>
     where M: Display {
-        let mut child = Command::new("dot")
-            .arg("-Tsvg")
-            .arg("-o")
-            .arg(path_svg)
-            .arg("-Tpng")
-            .arg("-o")
-            .arg(path_png)
-            .arg("-Nshape=none")
-            .arg("-Earrowhead=none")
-            .stdin(Stdio::piped())
-            .spawn()?;
-
-        fn draw_node<'a, M: Display, W: Write>(w: &mut W, node: &AnnotatedConstituent<'a, M>, n: &mut impl Iterator<Item=usize>) -> io::Result<usize> {
-            let n = match node {
-                AWord(m, word) => {
-                    let node_n = n.next().unwrap();
-                    writeln!(w, "n{node_n} [fontcolor=blue label=\"{m}\"]")?;
-                    let word_n = n.next().unwrap();
-                    writeln!(w, "n{word_n} [label=\"{word}\"]")?;
-                    writeln!(w, "n{node_n} -> n{word_n}")?;
-
-                    node_n
-                }
+        fn draw_node<'a, M: Display, W: Write>(w: &mut W, node: &AnnotatedConstituent<'a, M>) -> io::Result<()> {
+            match node {
+                // (the `\\` removes the line between the "mark" and the lexical item)
+                AWord(m, word) => write!(w, "[.{m}\\\\{word} ]"),
                 APair(m, l, r) => {
-                    let node_n = n.next().unwrap();
-                    writeln!(w, "n{node_n} [fontcolor=blue label=\"{m}\"]")?;
-
-                    let node_l = draw_node(w, l, n)?;
-                    let node_r = draw_node(w, r, n)?;
-
-                    writeln!(w, "n{node_n} -> {{n{node_l} n{node_r}}}")?;
-
-                    node_n
+                    write!(w, "[.{m} ")?;
+                    draw_node(w, l)?;
+                    write!(w, " ")?;
+                    draw_node(w, r)?;
+                    write!(w, " ]")
                 }
-            };
-
-            Ok(n)
+            }
         }
 
         {
-            let i = child.stdin.as_mut().expect("stdin not piped");
+            let mut tex_file = File::create("tree.tex")?;
+            writeln!(tex_file, "{}", r#"\documentclass[12pt, margin=5mm]{standalone}
+\usepackage{tikz-qtree,tikz-qtree-compat}
+\tikzset{every tree node/.style={align=center,anchor=north}}
+\begin{document}
+"#)?;
+            
+            write!(tex_file, "\\Tree ")?;
+            draw_node(&mut tex_file, &self)?;
+            writeln!(tex_file)?;
 
-            writeln!(i, "digraph {{")?;
-            draw_node(i, &self, &mut (0..))?;
-            writeln!(i, "}}")?;
+            writeln!(tex_file, "\n{}", r"\end{document}")?;
         }
 
-        child.wait()?;
-
-        Ok(())
+        let tex_status = Command::new("pdflatex")
+            .arg("--output-directory")
+            .arg("tex_temp")
+            .arg("tree.tex")
+            .status()?;
+        
+        if tex_status.success() {
+            let tex_status = Command::new("convert")
+                .arg("-density")
+                .arg("300")
+                .arg("tex_temp/tree.pdf")
+                .arg("-quality")
+                .arg("90")
+                .arg("-alpha")
+                .arg("remove")
+                .arg(path_png)
+                .status()?;
+            if tex_status.success() {
+                Ok(())
+            } else {
+                return Err(io::Error::new(io::ErrorKind::InvalidData, "convert failed"));
+            }
+        } else {
+            return Err(io::Error::new(io::ErrorKind::InvalidData, "pdflatex failed"));
+        }
     }
 }
 
